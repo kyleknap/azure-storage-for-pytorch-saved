@@ -7,6 +7,12 @@
 build==1.2.1 \
     --hash=sha256:526263f4870c26f26c433545579475377b2b7588b6f1eac76a001e873ae3e19d \
     --hash=sha256:75e10f767a433d9a86e50d83f418e83efc18ede923ee5ff7df93b6cb0306c5d4
+    # via
+    #   azstoragetorch (pyproject.toml)
+    #   check-manifest
+check-manifest==0.49 \
+    --hash=sha256:058cd30057714c39b96ce4d83f254fc770e3145c7b1932b5940b4e3efb5521ef \
+    --hash=sha256:64a640445542cf226919657c7b78d02d9c1ca5b1c25d7e66e0e1ff325060f416
     # via azstoragetorch (pyproject.toml)
 colorama==0.4.6 \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
@@ -25,4 +31,6 @@ pyproject-hooks==1.1.0 \
 setuptools==72.1.0 \
     --hash=sha256:5a03e1860cf56bb6ef48ce186b0e557fdba433237481a9a625176c2831be15d1 \
     --hash=sha256:8d243eff56d095e5817f796ede6ae32941278f542e0f941867cc05ae52b162ec
-    # via azstoragetorch (pyproject.toml::build-system.requires)
+    # via
+    #   azstoragetorch (pyproject.toml::build-system.requires)
+    #   check-manifest
