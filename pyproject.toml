@@ -30,6 +30,7 @@ dynamic = ["version"]
 dev = [
     "build",
     "check-manifest",
+    "pytest",
 ]
 
 [project.urls]
