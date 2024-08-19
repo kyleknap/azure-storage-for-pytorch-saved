@@ -26,6 +26,13 @@ classifiers = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+dev = [
+    "build",
+    "check-manifest",
+    "pytest",
+]
+
 [project.urls]
 Homepage = "https://github.com/Azure/azure-storage-for-pytorch"
 Issues = "https://github.com/Azure/azure-storage-for-pytorch/issues"
