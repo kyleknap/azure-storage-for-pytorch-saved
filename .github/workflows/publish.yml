@@ -39,4 +39,4 @@ jobs:
       - name: Upload distributions to blob container
         env:
           AZCOPY_AUTO_LOGIN_TYPE: AZCLI
-        run: azcopy copy 'dist/' "https://azuresdkpartnerdrops.blob.core.windows.net/drops/azstoragetorch/python/$AZSTORAGETORCH_VERSION/" --recursive
+        run: azcopy copy 'dist/*' "https://azuresdkpartnerdrops.blob.core.windows.net/drops/azstoragetorch/python/$AZSTORAGETORCH_VERSION/" --recursive
