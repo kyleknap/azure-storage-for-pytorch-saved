@@ -132,13 +132,9 @@ class _BlobReader:
         if self._position >= self._blob_length:
             return b""
         if self._downloader is None or self._prev_read_position != self._position:
-            original = self._blob_client._config.max_single_get_size
-            if size != -1 and size < 32 * 1024 * 1024:
-                self._blob_client._config.max_single_get_size = size
-            self._downloader = self._get_downloader()
-            self._blob_client._config.max_single_get_size = original
+            self._downloader = self._get_downloader(size)
 
-        content = self._downloader.read(size)
+        content = self._downloader.read()
         self._position += len(content)
         self._prev_read_position = self._position
         return content
@@ -162,10 +158,11 @@ class _BlobReader:
             return self._blob_client.get_blob_properties().size
         return self._downloader.size
 
-    def _get_downloader(self):
+    def _get_downloader(self, size):
         return self._blob_client.download_blob(
             max_concurrency=self._DEFAULT_MAX_CONCURRENCY,
             offset=self._position,
+            length=size,
         )
 
     def _compute_new_position(self, offset, whence):
