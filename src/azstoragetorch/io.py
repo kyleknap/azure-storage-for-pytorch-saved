@@ -1,10 +1,11 @@
+import asyncio
 import functools
 import io
 import os
 from typing import Optional
 
-from azure.storage.blob import BlobClient
-from azure.identity import DefaultAzureCredential
+from azure.storage.blob.aio import BlobClient
+from azure.identity.aio import DefaultAzureCredential
 
 
 def open_blob(blob_url: str, mode: str) -> "BlobIO":
@@ -120,21 +121,19 @@ class BlobIO(io.IOBase):
 
 
 class _BlobReader:
-    _DEFAULT_MAX_CONCURRENCY = 8
+    _DEFAULT_MAX_CONCURRENCY = 32
 
     def __init__(self, blob_client: BlobClient):
         self._blob_client = blob_client
         self._position = 0
         self._prev_read_position = 0
         self._downloader = None
+        self._runner = asyncio.Runner()
 
     def read(self, size=-1) -> bytes:
         if self._position >= self._blob_length:
             return b""
-        if self._downloader is None or self._prev_read_position != self._position:
-            self._downloader = self._get_downloader(size)
-
-        content = self._downloader.read()
+        content = self._runner.run(self._read(size))
         self._position += len(content)
         self._prev_read_position = self._position
         return content
@@ -151,15 +150,29 @@ class _BlobReader:
 
     def close(self) -> None:
         self._downloader = None
+        self._runner.run(self._close_client())
+        self._runner.close()
+
+    async def _close_client(self):
+        await self._blob_client.close()
+
+    async def _read(self, size=-1):
+        if self._downloader is None or self._prev_read_position != self._position:
+            self._downloader = await self._get_downloader(size)
+        content = await self._downloader.read()
+        return content
 
     @functools.cached_property
     def _blob_length(self) -> int:
         if self._downloader is None:
-            return self._blob_client.get_blob_properties().size
+            return self._runner.run(self._get_blob_properties_async()).size
         return self._downloader.size
 
-    def _get_downloader(self, size):
-        return self._blob_client.download_blob(
+    async def _get_blob_properties_async(self):
+        return await self._blob_client.get_blob_properties()
+
+    async def _get_downloader(self, size):
+        return await self._blob_client.download_blob(
             max_concurrency=self._DEFAULT_MAX_CONCURRENCY,
             offset=self._position,
             length=size,
