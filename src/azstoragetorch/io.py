@@ -1,26 +1,17 @@
-import functools
 import io
 import os
 from typing import Optional
 
 from azure.storage.blob import BlobClient
-from azure.identity import DefaultAzureCredential
 
-
-def open_blob(blob_url: str, mode: str) -> "BlobIO":
-    blob_client = BlobClient.from_blob_url(
-        blob_url, credential=DefaultAzureCredential(),
-        connection_data_block_size=64 * 1024,
-    )
-    return BlobIO(blob_client, mode)
+import azstoragetorch.downloaders
 
 
 class BlobIO(io.IOBase):
     _SUPPORTED_MODES = {"rb", "wb"}
 
-    def __init__(self, blob_client: BlobClient, mode: str):
-        self._blob_client = blob_client
-
+    def __init__(self, blob_url: str, mode: str):
+        self._blob_url = blob_url
         self._validate_mode(mode)
         self._mode = mode
 
@@ -100,12 +91,12 @@ class BlobIO(io.IOBase):
 
     def _get_blob_reader(self) -> Optional["_BlobReader"]:
         if self.readable():
-            return _BlobReader(self._blob_client)
+            return _BlobReader(self._blob_url)
         return None
 
     def _get_blob_writer(self) -> Optional["_BlobWriter"]:
         if self.writable():
-            return _BlobWriter(self._blob_client)
+            return _BlobWriter(self._blob_url)
         return None
 
     def _close_blob_reader(self) -> None:
@@ -120,23 +111,17 @@ class BlobIO(io.IOBase):
 
 
 class _BlobReader:
-    _DEFAULT_MAX_CONCURRENCY = 8
+    _DOWNLOADER_CLS = azstoragetorch.downloaders.SyncSDKDownloader
 
-    def __init__(self, blob_client: BlobClient):
-        self._blob_client = blob_client
+    def __init__(self, blob_url: str):
         self._position = 0
-        self._prev_read_position = 0
-        self._downloader = None
+        self._downloader = self._DOWNLOADER_CLS.from_blob_url(blob_url)
 
     def read(self, size=-1) -> bytes:
-        if self._position >= self._blob_length:
+        if self._position >= self._downloader.get_blob_size():
             return b""
-        if self._downloader is None or self._prev_read_position != self._position:
-            self._downloader = self._get_downloader(size)
-
-        content = self._downloader.read()
+        content = self._downloader.download(self._position, size)
         self._position += len(content)
-        self._prev_read_position = self._position
         return content
 
     def seek(self, offset, whence=os.SEEK_SET) -> int:
@@ -150,20 +135,7 @@ class _BlobReader:
         return self._position
 
     def close(self) -> None:
-        self._downloader = None
-
-    @functools.cached_property
-    def _blob_length(self) -> int:
-        if self._downloader is None:
-            return self._blob_client.get_blob_properties().size
-        return self._downloader.size
-
-    def _get_downloader(self, size):
-        return self._blob_client.download_blob(
-            max_concurrency=self._DEFAULT_MAX_CONCURRENCY,
-            offset=self._position,
-            length=size,
-        )
+        self._downloader.close()
 
     def _compute_new_position(self, offset, whence):
         if whence == os.SEEK_SET:
@@ -171,13 +143,13 @@ class _BlobReader:
         if whence == os.SEEK_CUR:
             return self._position + offset
         if whence == os.SEEK_END:
-            return self._blob_length + offset
+            return self._downloader.get_blob_size() + offset
         raise ValueError(f"Unsupported whence: {whence}")
 
 
 class _BlobWriter:
-    def __init__(self, blob_client: BlobClient):
-        self._blob_client = blob_client
+    def __init__(self, blob_url: str):
+        self._blob_url = blob_url
 
     def write(self, b) -> int:
         return len(b)

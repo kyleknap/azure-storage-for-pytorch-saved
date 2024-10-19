@@ -106,7 +106,7 @@ def get_as_byteio(filename):
 
 def get_as_blobio(filename):
     model_uri = f"https://azstoragetorchdev.blob.core.windows.net/models/{filename}"
-    return azstoragetorch.io.open_blob(model_uri, mode='rb')
+    return azstoragetorch.io.BlobIO(model_uri, mode='rb')
 
 
 def get_as_adlfs(filename):
