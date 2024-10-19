@@ -111,7 +111,7 @@ class BlobIO(io.IOBase):
 
 
 class _BlobReader:
-    _DOWNLOADER_CLS = azstoragetorch.downloaders.AsyncSDKDownloader
+    _DOWNLOADER_CLS = azstoragetorch.downloaders.AsyncSDKProcessPoolDownloader
 
     def __init__(self, blob_url: str):
         self._position = 0

@@ -1,4 +1,6 @@
 import asyncio
+import concurrent.futures
+import math
 
 from azure.storage.blob import BlobClient
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient
@@ -64,7 +66,7 @@ class AsyncSDKDownloader(BaseDownloader):
     def from_blob_url(cls, blob_url):
         blob_client = AsyncBlobClient.from_blob_url(
             blob_url, credential=AsyncDefaultAzureCredential(),
-            connection_data_block_size=64 * 1024,
+            # connection_data_block_size=64 * 1024,
         )
         return cls(blob_client)
 
@@ -98,3 +100,106 @@ class AsyncSDKDownloader(BaseDownloader):
 
     async def _close_client(self):
         await self._blob_client.close()
+
+
+class AsyncSDKProcessPoolDownloader(BaseDownloader):
+    _NUM_WORKERS = 12
+    _DEFAULT_MAX_CONCURRENCY = 12
+
+    def __init__(self, blob_client, blob_url):
+        self._blob_client = blob_client
+        self._blob_url = blob_url
+        self._blob_size = None
+        self._pool = concurrent.futures.ProcessPoolExecutor(
+            max_workers=self._NUM_WORKERS,
+            initializer=_init_process,
+            initargs=(blob_url, AsyncDefaultAzureCredential()),
+        )
+        self._runner = asyncio.Runner()
+
+    @classmethod
+    def from_blob_url(cls, blob_url):
+        blob_client = AsyncBlobClient.from_blob_url(
+            blob_url, credential=AsyncDefaultAzureCredential(),
+            # connection_data_block_size=64 * 1024,
+        )
+        return cls(blob_client, blob_url)
+
+    def download(self, pos, length):
+        futures = []
+        for partition in self._partition_read(pos, length):
+            futures.append(self._pool.submit(_download, *partition))
+        return b"".join(f.result() for f in futures)
+
+    def get_blob_size(self):
+        if self._blob_size is None:
+            self._blob_size = self._runner.run(self._get_blob_properties()).size
+        return self._blob_size
+
+    def close(self):
+        self._pool.shutdown()
+        self._runner.run(self._close_client())
+        self._runner.close()
+
+    async def _get_blob_properties(self):
+        return await self._blob_client.get_blob_properties()
+
+    async def _close_client(self):
+        await self._blob_client.close()
+
+    def _partition_read(self, pos, length):
+        blob_size = self.get_blob_size()
+        if pos >= blob_size:
+            return []
+
+        if length < 4 * 1024 * 1024:
+            return [(pos, length)]
+
+        # TODO: Double check this
+        if math.ceil(length / self._NUM_WORKERS) < 4 * 1024 * 1024:
+            num_partitions = math.ceil(length / (4 * 1024 * 1024))
+            partition_size = 4 * 1024 * 1024
+        else:
+            num_partitions = self._NUM_WORKERS
+            partition_size = math.ceil(length / self._NUM_WORKERS)
+
+        partitions = []
+
+        for i in range(num_partitions):
+            start = pos + i * partition_size
+            if start >= blob_size:
+                break
+            end = min(start + partition_size, blob_size)
+            partitions.append((start, end - start))
+
+        return partitions
+
+
+def _init_process(blob_url, credentials=None):
+    global async_sdk_client
+    async_sdk_client = AsyncBlobClient.from_blob_url(
+        blob_url, credential=credentials,
+        # connection_data_block_size=64 * 1024,
+    )
+    global async_runner
+    async_runner = asyncio.Runner()
+
+
+def _download(pos, length):
+    global async_sdk_client
+    global async_runner
+    sdk_downloader = async_runner.run(
+        _get_downloader(async_sdk_client, pos, length)
+    )
+    return async_runner.run(_read(sdk_downloader))
+
+
+async def _get_downloader(blob_client, pos, size):
+    return await blob_client.download_blob(
+        max_concurrency=AsyncSDKProcessPoolDownloader._DEFAULT_MAX_CONCURRENCY,
+        offset=pos,
+        length=size,
+    )
+
+async def _read(sdk_downloader):
+    return await sdk_downloader.read()
