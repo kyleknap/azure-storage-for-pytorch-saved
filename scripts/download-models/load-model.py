@@ -355,6 +355,7 @@ def benchmark_load_from_blobfile(filename):
 def benchmark_playback_from_blobio(filename):
     io_obj = get_as_blobio(filename)
     json_playback = json.load(open(f"{filename}_recorded.json"))
+    # print(get_elapsed_time(io_obj.read, 20_000_000_000))
     print(get_elapsed_time(playback, io_obj, json_playback))
 
 def enable_logging():

@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import io
 import math
 import copy
 
@@ -7,6 +8,9 @@ from azure.storage.blob import BlobClient
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient
 from azure.identity import DefaultAzureCredential
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+
+import certifi
+import urllib3
 
 
 class BaseDownloader:
@@ -209,4 +213,201 @@ async def _get_downloader(blob_client, pos, size):
     )
 
 async def _read(sdk_downloader):
-    return await sdk_downloader.read()
+    await sdk_downloader.read()
+    return b""
+
+class Urllib3Downloader(BaseDownloader):
+    _WORKER_COUNT = 8
+    _READ_SIZE = 64 * 1024
+    _THRESHOLD = 4 * 1024 * 1024
+    _PARTITION_SIZE = 4 * 1024 * 1024
+
+    def __init__(self, blob_url, credential):
+        self._blob_url = blob_url
+        self._credential = credential
+        self._blob_size = None
+        self._request_pool = urllib3.PoolManager(
+            maxsize=10,
+            ca_certs=certifi.where(),
+        )
+        self._thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=self._WORKER_COUNT)
+
+    @classmethod
+    def from_blob_url(cls, blob_url, credential=None):
+        return cls(blob_url, credential)
+
+    def download(self, pos, length):
+        if length < 4 * 1024 * 1024:
+            return self._download(pos, length)
+        futures = []
+        for partition in self._partition_read(pos, length):
+            futures.append(self._thread_pool.submit(self._download, *partition))
+        return b"".join(f.result() for f in futures)
+
+    def get_blob_size(self):
+        if self._blob_size is None:
+            self._blob_size = self._get_blob_size()
+        return self._blob_size
+
+    def close(self):
+        self._thread_pool.shutdown()
+
+    def _get_blob_size(self):
+        resp = self._request_pool.request(
+            "HEAD",
+            f"{self._blob_url}?{self._credential}",
+            headers={"x-ms-version": "2025-01-05"},
+        )
+        self._raise_for_status(resp)
+        return int(resp.headers["Content-Length"])
+
+    def _partition_read(self, pos, length):
+        blob_size = self.get_blob_size()
+        partition_size = 4 * 1024 * 1024
+        num_partitions = math.ceil(length / (4 * 1024 * 1024))
+        partitions = []
+        for i in range(num_partitions):
+            start = pos + i * partition_size
+            if start >= blob_size:
+                break
+            end = min(start + partition_size, pos + length)
+            partitions.append((start, end - start))
+        return partitions
+
+    def _download(self, pos, length):
+        resp = self._request_pool.request(
+            "GET",
+            f"{self._blob_url}?{self._credential}",
+            headers={
+                "x-ms-version": "2025-01-05",
+                "Range": f"bytes={pos}-{pos + length - 1}",
+            },
+            preload_content=False,
+        )
+        self._raise_for_status(resp)
+        content = io.BytesIO()
+        for chunk in resp.stream(self._READ_SIZE):
+            content.write(chunk)
+        ret = content.getvalue()
+        return ret
+
+    def _raise_for_status(self, response):
+        if response.status >= 300:
+            raise RuntimeError(f"Response failed: ({response.status}) {response.reason}")
+
+
+class SyncLowLevelSDKDownloader(BaseDownloader):
+    _DEFAULT_MAX_CONCURRENCY = 8
+    _READ_SIZE = 64 * 1024
+    _THRESHOLD = 4 * 1024 * 1024
+    _PARTITION_SIZE = 8 * 1024 * 1024
+    _EXECUTOR_CLS = concurrent.futures.ThreadPoolExecutor
+
+    def __init__(self, blob_url, credential=None):
+        self._blob_url = blob_url
+        if credential is None:
+            credential = DefaultAzureCredential()
+        self._credential = credential
+        blob_client = BlobClient.from_blob_url(
+            blob_url, credential=credential,
+            connection_data_block_size=64 * 1024,
+        )
+        self._blob_client = blob_client
+        self._blob_size = None
+        self._pool = self._EXECUTOR_CLS(max_workers=self._DEFAULT_MAX_CONCURRENCY)
+
+    @classmethod
+    def from_blob_url(cls, blob_url, credential=None):
+        return cls(blob_url, credential)
+
+    def download(self, pos, length):
+        if length < self._THRESHOLD:
+            return self._download(pos, length)
+        futures = []
+        for partition in self._partition_read(pos, length):
+            futures.append(self._pool.submit(self._download, *partition))
+        return b"".join(f.result() for f in futures)
+
+    def get_blob_size(self):
+        if self._blob_size is None:
+            self._blob_size = self._blob_client.get_blob_properties().size
+        return self._blob_size
+
+    def close(self):
+        self._pool.shutdown()
+
+    def _partition_read(self, pos, length):
+        blob_size = self.get_blob_size()
+        num_partitions = math.ceil(length / (self._PARTITION_SIZE))
+        partitions = []
+        for i in range(num_partitions):
+            start = pos + i * self._PARTITION_SIZE
+            if start >= blob_size:
+                break
+            end = min(start + self._PARTITION_SIZE, pos + length)
+            partitions.append((start, end - start))
+        return partitions
+
+    def _download(self, pos, length):
+        stream = self._blob_client._client.blob.download(
+            range=f"bytes={pos}-{pos + length - 1}",
+        )
+        content = io.BytesIO()
+        for chunk in stream:
+            content.write(chunk)
+        ret = content.getvalue()
+        return ret
+
+
+class SyncLowLevelSDKProcessPoolDownloader(SyncLowLevelSDKDownloader):
+    _DEFAULT_MAX_CONCURRENCY = 16
+    _READ_SIZE = 64 * 1024
+    _THRESHOLD = 8 * 1024 * 1024
+    _PARTITION_SIZE = 8 * 1024 * 1024
+    _EXECUTOR_CLS = concurrent.futures.ProcessPoolExecutor
+
+    def __init__(self, blob_url, credential=None):
+        self._blob_url = blob_url
+        if credential is None:
+            credential = DefaultAzureCredential()
+        self._credential = credential
+        blob_client = BlobClient.from_blob_url(
+            blob_url, credential=credential,
+            connection_data_block_size=64 * 1024,
+        )
+        self._blob_client = blob_client
+        self._blob_size = None
+        self._pool = self._EXECUTOR_CLS(
+            max_workers=self._DEFAULT_MAX_CONCURRENCY,
+            initializer=_init_sync_process,
+            initargs=(blob_url, copy.deepcopy(credential)),
+        )
+
+    def download(self, pos, length):
+        if length < self._THRESHOLD:
+            return self._download(pos, length)
+        futures = []
+        for partition in self._partition_read(pos, length):
+            futures.append(self._pool.submit(_sync_download, *partition))
+        return b"".join(f.result() for f in futures)
+
+
+def _init_sync_process(blob_url, credentials=None):
+    global sync_sdk_client
+    sync_sdk_client = BlobClient.from_blob_url(
+        blob_url, credential=credentials,
+        connection_data_block_size=64 * 1024,
+    )
+
+
+def _sync_download(pos, length):
+    global sync_sdk_client
+    stream = sync_sdk_client._client.blob.download(
+        range=f"bytes={pos}-{pos + length - 1}",
+    )
+    content = io.BytesIO()
+    for chunk in stream:
+        content.write(chunk)
+    ret = content.getvalue()
+    # return b""
+    return ret
