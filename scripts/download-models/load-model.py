@@ -13,6 +13,9 @@ import blobfile as bf
 
 import azstoragetorch.io
 
+ACCOUNT_NAME = "azstoragetorchdev"
+CREDENTIAL = None
+
 
 @dataclasses.dataclass
 class FileOp:
@@ -105,19 +108,19 @@ def get_as_byteio(filename):
         return io.BytesIO(f.read())
 
 def get_as_blobio(filename):
-    model_uri = f"https://azstoragetorchdev.blob.core.windows.net/models/{filename}"
-    return azstoragetorch.io.BlobIO(model_uri, mode='rb')
+    model_uri = f"https://{ACCOUNT_NAME}.blob.core.windows.net/models/{filename}"
+    return azstoragetorch.io.BlobIO(model_uri, mode='rb', credential=CREDENTIAL)
 
 
 def get_as_adlfs(filename):
     from adlfs import AzureBlobFileSystem
-    fs = AzureBlobFileSystem(account_name="azstoragetorchdev", anon=False)
+    fs = AzureBlobFileSystem(account_name=ACCOUNT_NAME, anon=False)
     return fs.open(f"abfs://models/{filename}", "rb")
 
 
 def get_as_blobfile(filename):
     os.environ['AZURE_USE_IDENTITY'] = '1'
-    return bf.BlobFile(f"az://azstoragetorchdev/models/{filename}", "rb")
+    return bf.BlobFile(f"az://{ACCOUNT_NAME}/models/{filename}", "rb")
 
 
 def playback(io_object, playback_json):

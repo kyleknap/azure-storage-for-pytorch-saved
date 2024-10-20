@@ -10,10 +10,11 @@ import azstoragetorch.downloaders
 class BlobIO(io.IOBase):
     _SUPPORTED_MODES = {"rb", "wb"}
 
-    def __init__(self, blob_url: str, mode: str):
+    def __init__(self, blob_url: str, mode: str, credential=None):
         self._blob_url = blob_url
         self._validate_mode(mode)
         self._mode = mode
+        self._credential = credential
 
         self._blob_reader = self._get_blob_reader()
         self._blob_writer = self._get_blob_writer()
@@ -91,7 +92,7 @@ class BlobIO(io.IOBase):
 
     def _get_blob_reader(self) -> Optional["_BlobReader"]:
         if self.readable():
-            return _BlobReader(self._blob_url)
+            return _BlobReader(self._blob_url, self._credential)
         return None
 
     def _get_blob_writer(self) -> Optional["_BlobWriter"]:
@@ -113,9 +114,9 @@ class BlobIO(io.IOBase):
 class _BlobReader:
     _DOWNLOADER_CLS = azstoragetorch.downloaders.AsyncSDKProcessPoolDownloader
 
-    def __init__(self, blob_url: str):
+    def __init__(self, blob_url: str, credential=None):
         self._position = 0
-        self._downloader = self._DOWNLOADER_CLS.from_blob_url(blob_url)
+        self._downloader = self._DOWNLOADER_CLS.from_blob_url(blob_url, credential=credential)
 
     def read(self, size=-1) -> bytes:
         if self._position >= self._downloader.get_blob_size():

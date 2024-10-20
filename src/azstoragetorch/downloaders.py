@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import math
+import copy
 
 from azure.storage.blob import BlobClient
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient
@@ -10,7 +11,7 @@ from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCreden
 
 class BaseDownloader:
     @classmethod
-    def from_blob_url(cls, blob_url):
+    def from_blob_url(cls, blob_url, credential=None):
         raise NotImplementedError("from_blob_url")
 
     def download(self, pos, length):
@@ -31,9 +32,11 @@ class SyncSDKDownloader(BaseDownloader):
         self._blob_size = None
 
     @classmethod
-    def from_blob_url(cls, blob_url):
+    def from_blob_url(cls, blob_url, credential=None):
+        if credential is None:
+            credential = DefaultAzureCredential()
         blob_client = BlobClient.from_blob_url(
-            blob_url, credential=DefaultAzureCredential(),
+            blob_url, credential=credential,
             connection_data_block_size=64 * 1024,
         )
         return cls(blob_client)
@@ -63,9 +66,11 @@ class AsyncSDKDownloader(BaseDownloader):
         self._runner = asyncio.Runner()
 
     @classmethod
-    def from_blob_url(cls, blob_url):
+    def from_blob_url(cls, blob_url, credential=None):
+        if credential is None:
+            credential = AsyncDefaultAzureCredential()
         blob_client = AsyncBlobClient.from_blob_url(
-            blob_url, credential=AsyncDefaultAzureCredential(),
+            blob_url, credential=credential,
             # connection_data_block_size=64 * 1024,
         )
         return cls(blob_client)
@@ -106,24 +111,26 @@ class AsyncSDKProcessPoolDownloader(BaseDownloader):
     _NUM_WORKERS = 12
     _DEFAULT_MAX_CONCURRENCY = 12
 
-    def __init__(self, blob_client, blob_url):
+    def __init__(self, blob_client, blob_url, credential):
         self._blob_client = blob_client
         self._blob_url = blob_url
         self._blob_size = None
         self._pool = concurrent.futures.ProcessPoolExecutor(
             max_workers=self._NUM_WORKERS,
             initializer=_init_process,
-            initargs=(blob_url, AsyncDefaultAzureCredential()),
+            initargs=(blob_url, copy.deepcopy(credential)),
         )
         self._runner = asyncio.Runner()
 
     @classmethod
-    def from_blob_url(cls, blob_url):
+    def from_blob_url(cls, blob_url, credential=None):
+        if credential is None:
+            credential = AsyncDefaultAzureCredential()
         blob_client = AsyncBlobClient.from_blob_url(
-            blob_url, credential=AsyncDefaultAzureCredential(),
+            blob_url, credential,
             # connection_data_block_size=64 * 1024,
         )
-        return cls(blob_client, blob_url)
+        return cls(blob_client, blob_url, credential)
 
     def download(self, pos, length):
         futures = []
