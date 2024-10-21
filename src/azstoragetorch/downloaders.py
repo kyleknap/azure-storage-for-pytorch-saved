@@ -1,8 +1,10 @@
 import asyncio
+import atexit
 import concurrent.futures
 import io
 import math
 import copy
+import multiprocessing.shared_memory
 
 from azure.storage.blob import BlobClient
 from azure.storage.blob.aio import BlobClient as AsyncBlobClient
@@ -411,3 +413,92 @@ def _sync_download(pos, length):
     ret = content.getvalue()
     # return b""
     return ret
+
+
+class SharedMemoryProcessPoolDownloader(SyncLowLevelSDKDownloader):
+    _DEFAULT_MAX_CONCURRENCY = 32
+    _READ_SIZE = 64 * 1024
+    _THRESHOLD = 8 * 1024 * 1024
+    _PARTITION_SIZE = 8 * 1024 * 1024
+    _EXECUTOR_CLS = concurrent.futures.ProcessPoolExecutor
+
+    def __init__(self, blob_url, credential=None):
+        self._blob_url = blob_url
+        if credential is None:
+            credential = DefaultAzureCredential()
+        self._credential = credential
+        blob_client = BlobClient.from_blob_url(
+            blob_url, credential=credential,
+            connection_data_block_size=64 * 1024,
+        )
+        self._blob_client = blob_client
+        self._blob_size = None
+        self._shm = multiprocessing.shared_memory.SharedMemory(create=True, size=self._PARTITION_SIZE)
+        self._pool = self._EXECUTOR_CLS(
+            max_workers=self._DEFAULT_MAX_CONCURRENCY,
+            initializer=_init_sync_process,
+            initargs=(blob_url, copy.deepcopy(credential)),
+        )
+
+    def download(self, pos, length):
+        if length < self._THRESHOLD:
+            return self._download(pos, length)
+        futures = []
+        shm_pos = 0
+        new_shm_name = None
+        if length > self._shm.size:
+            new_shm_name=self._new_shm(length)
+        for partition in self._partition_read(pos, length):
+            futures.append(self._pool.submit(_sync_download_shm, shm_pos, *partition, new_shm_name=new_shm_name))
+            shm_pos += partition[1]
+        concurrent.futures.wait(futures)
+
+        content = self._shm.buf[:length].tobytes()
+        return content
+
+    def close(self):
+        super().close()
+        self._cleanup_shm()
+
+    def _cleanup_shm(self):
+        self._shm.close()
+        self._shm.unlink()
+
+    def _new_shm(self, size):
+        self._cleanup_shm()
+        self._shm = multiprocessing.shared_memory.SharedMemory(create=True, size=size)
+        return self._shm.name
+
+
+def _init_shm_process(blob_url, shm_name, credentials=None):
+    global sync_sdk_client
+    sync_sdk_client = BlobClient.from_blob_url(
+        blob_url, credential=credentials,
+        connection_data_block_size=64 * 1024,
+    )
+    global shm
+    shm = multiprocessing.shared_memory.SharedMemory(name=shm_name)
+    atexit.register(_shm_cleanup)
+
+
+def _sync_download_shm(shm_pos, pos, length, new_shm_name=None):
+    global sync_sdk_client
+    stream = sync_sdk_client._client.blob.download(
+        range=f"bytes={pos}-{pos + length - 1}",
+    )
+    global shm
+    if new_shm_name is not None:
+        shm.close()
+        shm = multiprocessing.shared_memory.SharedMemory(name=new_shm_name)
+    for chunk in stream:
+        shm.buf[shm_pos:shm_pos + len(chunk)] = chunk
+        shm_pos += len(chunk)
+    # content = b"".join(stream)
+    # shm.buf[shm_pos:shm_pos + len(content)] = content
+    # shm.close()
+
+
+def _shm_cleanup():
+    global shm
+    if shm is not None:
+        shm.close()

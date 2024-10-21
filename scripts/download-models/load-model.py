@@ -16,7 +16,6 @@ import azstoragetorch.io
 ACCOUNT_NAME = "azstoragetorchdev"
 CREDENTIAL = None
 
-
 @dataclasses.dataclass
 class FileOp:
     name: str
