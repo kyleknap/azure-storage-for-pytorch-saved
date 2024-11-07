@@ -298,7 +298,7 @@ pytest==8.3.2 \
     --hash=sha256:4ba08f9ae7dcf84ded419494d229b48d0903ea6407b030eaec46df5e6a73bba5 \
     --hash=sha256:c132345d12ce551242c87269de812483f5bcc87cdbb4722e48487ba194f9fdce
     # via azstoragetorch (pyproject.toml)
-pywin32==308 \
+pywin32==308 ; sys_platform == 'win32'  \
     --hash=sha256:00b3e11ef09ede56c6a43c71f2d31857cf7c54b0ab6e78ac659497abd2834f47 \
     --hash=sha256:100a5442b7332070983c4cd03f2e906a5648a5104b8a7f50175f7906efd16bb6 \
     --hash=sha256:13dcb914ed4347019fbec6697a01a0aec61019c1046c2b905410d197856326a6 \
