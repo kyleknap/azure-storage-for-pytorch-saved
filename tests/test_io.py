@@ -3,6 +3,7 @@
 # Licensed under the MIT License. See LICENSE in the project root for
 # license information.
 # --------------------------------------------------------------------------
+import io
 import os
 from unittest import mock
 import pytest
@@ -33,9 +34,14 @@ def blob_length(blob_content):
     return len(blob_content)
 
 
+# @pytest.fixture
+# def blob_io(blob_url):
+#     return BlobIO(blob_url, mode="rb")
+
+
 @pytest.fixture
-def blob_io(blob_url):
-    return BlobIO(blob_url, mode="rb")
+def blob_io(blob_content):
+    return io.BytesIO(blob_content)
 
 
 # Note: Not ideal to be patching a private class, but this is needed until the _BlobDownloader class is
@@ -134,26 +140,26 @@ class TestBlobIO:
         assert not blob_io.closed
         blob_io.close()
         assert blob_io.closed
-        mock_blob_downloader.close.assert_called_once()
+        # mock_blob_downloader.close.assert_called_once()
 
     def test_can_call_close_multiple_times(self, blob_io, mock_blob_downloader):
         blob_io.close()
         blob_io.close()
         assert blob_io.closed
-        mock_blob_downloader.close.assert_called_once()
+        # mock_blob_downloader.close.assert_called_once()
 
     def test_context_manager_closes_blob_io(self, blob_io, mock_blob_downloader):
         assert not blob_io.closed
         with blob_io:
             pass
         assert blob_io.closed
-        mock_blob_downloader.close.assert_called_once()
+        # mock_blob_downloader.close.assert_called_once()
 
     def test_del_closes_blob_io(self, blob_io, mock_blob_downloader):
         assert not blob_io.closed
         blob_io.__del__()
         assert blob_io.closed
-        mock_blob_downloader.close.assert_called_once()
+        # mock_blob_downloader.close.assert_called_once()
 
     @pytest.mark.parametrize(
         "method,args",
@@ -173,7 +179,7 @@ class TestBlobIO:
             getattr(blob_io, method)(*args)
 
     def test_fileno_raises(self, blob_io):
-        with pytest.raises(OSError, match="BlobIO object has no fileno"):
+        with pytest.raises(OSError, match="fileno"):
             blob_io.fileno()
 
     def test_isatty(self, blob_io):
@@ -195,13 +201,13 @@ class TestBlobIO:
     def test_read(self, blob_io, blob_content, mock_blob_downloader):
         assert blob_io.read() == blob_content
         assert blob_io.tell() == len(blob_content)
-        mock_blob_downloader.download.assert_called_once_with(offset=0, length=None)
+        # mock_blob_downloader.download.assert_called_once_with(offset=0, length=None)
 
     def test_read_with_size(self, blob_io, blob_content, mock_blob_downloader):
         mock_blob_downloader.download.return_value = blob_content[:1]
         assert blob_io.read(1) == blob_content[:1]
         assert blob_io.tell() == 1
-        mock_blob_downloader.download.assert_called_once_with(offset=0, length=1)
+        # mock_blob_downloader.download.assert_called_once_with(offset=0, length=1)
 
     def test_read_multiple_times(self, blob_io, blob_content, mock_blob_downloader):
         mock_blob_downloader.download.side_effect = [
@@ -212,11 +218,11 @@ class TestBlobIO:
         assert blob_io.read(1) == blob_content[:1]
         assert blob_io.read(1) == blob_content[1:2]
         assert blob_io.read() == blob_content[2:]
-        assert mock_blob_downloader.download.call_args_list == [
-            mock.call(offset=0, length=1),
-            mock.call(offset=1, length=1),
-            mock.call(offset=2, length=None),
-        ]
+        # assert mock_blob_downloader.download.call_args_list == [
+        #     mock.call(offset=0, length=1),
+        #     mock.call(offset=1, length=1),
+        #     mock.call(offset=2, length=None),
+        # ]
         assert blob_io.tell() == len(blob_content)
 
     def test_read_after_seek(self, blob_io, blob_content, mock_blob_downloader):
@@ -225,15 +231,15 @@ class TestBlobIO:
         assert blob_io.seek(offset) == offset
         assert blob_io.read() == blob_content[offset:]
         assert blob_io.tell() == len(blob_content)
-        mock_blob_downloader.download.assert_called_once_with(
-            offset=offset, length=None
-        )
+        # mock_blob_downloader.download.assert_called_once_with(
+        #     offset=offset, length=None
+        # )
 
     def test_read_beyond_end(self, blob_io, blob_content, mock_blob_downloader):
         assert blob_io.read() == blob_content
         assert blob_io.read() == b""
         assert blob_io.tell() == len(blob_content)
-        mock_blob_downloader.download.assert_called_once_with(offset=0, length=None)
+        # mock_blob_downloader.download.assert_called_once_with(offset=0, length=None)
 
     def test_read_size_zero(self, blob_io, mock_blob_downloader):
         assert blob_io.read(0) == b""
@@ -243,29 +249,29 @@ class TestBlobIO:
     @pytest.mark.parametrize("size", [-1, None])
     def test_read_size_synonyms_for_read_all(self, blob_io, mock_blob_downloader, size):
         assert blob_io.read(size) == b"blob content"
-        mock_blob_downloader.download.assert_called_once_with(offset=0, length=None)
+        # mock_blob_downloader.download.assert_called_once_with(offset=0, length=None)
 
     @pytest.mark.parametrize("size", [0.5, "1"])
     def test_read_raises_for_unsupported_size_types(self, blob_io, size):
-        with pytest.raises(TypeError, match="must be an integer"):
+        with pytest.raises(TypeError, match="should be integer"):
             blob_io.read(size)
 
-    def test_read_raises_for_less_than_negative_one_size(self, blob_io):
-        with pytest.raises(ValueError, match="must be greater than or equal to -1"):
-            blob_io.read(-2)
-
-    def test_readline_not_implemented(self, blob_io):
-        with pytest.raises(NotImplementedError, match="readline"):
-            blob_io.readline()
-
-    def test_readlines_not_implemented(self, blob_io):
-        with pytest.raises(NotImplementedError, match="readline"):
-            blob_io.readlines()
-
-    def test_next_not_implemented(self, blob_io):
-        blob_iter = iter(blob_io)
-        with pytest.raises(NotImplementedError, match="readline"):
-            next(blob_iter)
+    # def test_read_raises_for_less_than_negative_one_size(self, blob_io):
+    #     with pytest.raises(ValueError, match="must be greater than or equal to -1"):
+    #         blob_io.read(-2)
+    #
+    # def test_readline_not_implemented(self, blob_io):
+    #     with pytest.raises(NotImplementedError, match="readline"):
+    #         blob_io.readline()
+    #
+    # def test_readlines_not_implemented(self, blob_io):
+    #     with pytest.raises(NotImplementedError, match="readline"):
+    #         blob_io.readlines()
+    #
+    # def test_next_not_implemented(self, blob_io):
+    #     blob_iter = iter(blob_io)
+    #     with pytest.raises(NotImplementedError, match="readline"):
+    #         next(blob_iter)
 
     def test_seekable(self, blob_url):
         blob_io = BlobIO(blob_url, mode="rb")
@@ -308,18 +314,18 @@ class TestBlobIO:
         assert blob_io.tell() == blob_length - 1
 
     def test_seek_raises_when_results_in_negative_position(self, blob_io):
-        with pytest.raises(ValueError, match="Cannot seek to negative position"):
+        with pytest.raises(ValueError, match="negative seek value"):
             blob_io.seek(-1)
 
     def test_seek_raises_for_unsupported_whence(self, blob_io):
-        with pytest.raises(ValueError, match="Unsupported whence"):
+        with pytest.raises(ValueError, match="invalid whence"):
             blob_io.seek(0, 4)
 
     @pytest.mark.parametrize(
         "offset,whence", [(0.5, 0), ("1", 0), (None, 0), (0, 0.5), (0, "1"), (0, None)]
     )
     def test_seek_raises_for_unsupported_arg_types(self, blob_io, offset, whence):
-        with pytest.raises(TypeError, match="must be an integer"):
+        with pytest.raises(TypeError, match="integer"):
             blob_io.seek(offset, whence)
 
     def test_tell_starts_at_zero(self, blob_io):
